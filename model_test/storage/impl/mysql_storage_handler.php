@@ -1,206 +1,319 @@
 <?php
 
-require_once(dirname(__FILE__) . DIRECTORY_SEPARATOR . '../storage_handler.php');
 require_once(dirname(__FILE__) . DIRECTORY_SEPARATOR . '../rdbms_storage_handler.php');
+require_once(dirname(__FILE__) . DIRECTORY_SEPARATOR . '../../config/config.php');
 
 // MySQL版
-class mysql_storage_handler extends rdbms_storage_handler implements storage_handler
+class mysql_storage_handler extends rdbms_storage_handler
 {
-  const ENTITY_CLASS_DIRECTORY = '../../model/entity/';
+  const SQL_ESCAPE_CHARACTER = '`';
+
+  private static $BIND_TYPE_MAPPINGS = array(
+    parent::PARAM_INT => 'i',
+    parent::PARAM_STR => 's',
+  );
 
   private $statement;
 
-  private $columns;
-
-  private $from;
-
-  private $where;
-
-  private $group_by;
-
-  // 以下、having・order_byなどが続く
-
-  private $bind_params;
-
-  private $repository_class;
-
-  private $entity_class_name;
-
-  public function set_columns($columns)
+  protected function set_statement($statement)
   {
-    $this->columns = $columns;
+    $this->statement = $statement;
   }
 
-  public function set_from($from)
+  protected function get_statement()
   {
-    $this->from = $from;
+    return $this->statement;
   }
 
-  public function set_where($where)
+  public function connect()
   {
-    $this->where = $where;
-  }
-
-  public function set_group_by($group_by)
-  {
-    $this->group_by = $group_by;
-  }
-
-  public function set_bind_params($bind_params)
-  {
-    $this->bind_params = $bind_params;
-  }
-
-  public function set_repository_class(base_repository $repository_class)
-  {
-    $this->repository_class = $repository_class;
-  }
-
-  public function set_entity_class_name($entity_class_name)
-  {
-    $this->entity_class_name = $entity_class_name;
-  }
-
-  public function get()
-  {
-    $sql = 'SELECT ' . $this->columns . ' FROM ' . $this->from;
-    if ('' !== $this->where)
+    // DB接続処理
+    if (null === $this->get_connection())
     {
-      $sql .= ' WHERE ' . $this->where;
-    }
-    // 以下、GROUP BYなどが続く
+      // DB接続
+      $connection = new mysqli($this->get_host_name(), $this->get_user_name(), $this->get_password(), $this->get_database_name(), $this->get_port_number());
+      if (null !== $connection->connect_error)
+      {
+        // DB接続失敗
+        $this->set_error_message('DB接続に失敗しました。 ' . $connection->connect_error);
 
-    $handle_instance = $this->get_handle_instance();
-    $this->statement = $handle_instance->prepare($sql);
+        return false;
+      }
 
-    foreach ($this->bind_params as $bind_param)
-    {
-      $this->statement->bindValue($bind_param['name'], $bind_param['value'], $bind_param['data_type']);
+      $this->set_connection($connection);
+
+      // 文字コード設定
+      $this->get_connection()->set_charset(DB_CHARACTER_SET);
     }
 
-    $result = $this->statement->execute();
+    return true;
+  }
+
+  public function fetch($mode)
+  {
+    $result = null;
+
+    $result_set = $this->get_result_set();
+
+    if (0 < count($result_set))
+    {
+      $statement = $this->get_statement();
+      $entity_class_name = $this->get_entity_class_name();
+    }
+
+    if (parent::FETCH_ONE === $mode)
+    {
+      $entity = null;
+
+      if (true === isset($statement))
+      {
+        if ($statement->fetch())
+        {
+          $entity = new $entity_class_name;
+          foreach ($result_set['data'] as $column_name => $column_value)
+          {
+            if (true === $entity->is_property_exists($column_name))
+            {
+              $entity->set_entity_data($column_name, $column_value);
+            }
+          }
+        }
+      }
+
+      $result = $entity;
+    }
+    else if (parent::FETCH_ALL === $mode)
+    {
+      $entities = array();
+
+      if (true === isset($statement))
+      {
+        while ($statement->fetch())
+        {
+          $entity = new $entity_class_name;
+          foreach ($result_set['data'] as $column_name => $column_value)
+          {
+            if (true === $entity->is_property_exists($column_name))
+            {
+              $entity->set_entity_data($column_name, $column_value);
+            }
+          }
+          $entities[] = $entity;
+        }
+      }
+
+      $result = $entities;
+    }
+    else
+    {
+      throw new Exception('フェッチのモードが不明です');
+    }
+
+    if (true === isset($statement))
+    {
+      $statement->close();
+    }
 
     return $result;
   }
 
-  public function set()
+  public function fetch_all_associated_entity($unique_primary_key_data)
   {
-    // INSERT・UPDATE・DELETEを実行する
-  }
+    $result_set = $this->get_result_set();
 
-  public function fetch()
-  {
-    // １件しか取得しないのが分かり切っている時はコッチ
-  }
-
-  public function fetch_all()
-  {
-    $entities = array();
-
-    if (null !== $this->statement)
+    if (0 < count($result_set))
     {
-      // TODO: 当然、存在チェックもする
-      require_once(dirname(__FILE__) . DIRECTORY_SEPARATOR . self::ENTITY_CLASS_DIRECTORY . $this->entity_class_name . '.php');
-      $entities = $this->statement->fetchAll(PDO::FETCH_CLASS | PDO::FETCH_PROPS_LATE, $this->entity_class_name);
+      $statement = $this->get_statement();
+      $entity_class_name = $this->get_entity_class_name();
     }
 
-    return $entities;
-  }
-
-  public function fetch_all_associated_entity($associated_entities, $unique_primary_key_data = true)
-  {
-    $entities = array();
-
-    if (0 === count($associated_entities))
+    if (true === isset($statement))
     {
-      return $entities;
-    }
-
-    if (null !== $this->statement)
-    {
-      // TODO: 当然、存在チェックもする
-      require_once(dirname(__FILE__) . DIRECTORY_SEPARATOR . self::ENTITY_CLASS_DIRECTORY . $this->entity_class_name . '.php');
-      $main_entity = null;
-      while (false !== ($row = $this->statement->fetch(PDO::FETCH_ASSOC)))
+      $associated_entities = $this->get_associated_entities();
+      $associated_tables = $this->get_associated_tables();
+      $main_table_meta_data = $this->get_table_meta_data($this->get_table_name());
+      while ($statement->fetch())
       {
-        $entity_created = false;
-        if (true === $unique_primary_key_data &&
-            null !== $main_entity)
-        {
-          $row_values = array();
-          $entity_values = array();
-          $main_entity_index = array_search($main_entity, $entities, true);
-          $primary_keys = $this->repository_class->get_primary_keys();
-          foreach ($primary_keys as $primary_key)
-          {
-            if (true === isset($row[$primary_key]))
-            {
-              $row_values[] = $row[$primary_key];
-
-              if (false !== $main_entity_index)
-              {
-                $method_name = 'get_' . $primary_key;
-                $entity_values[] = call_user_func_array(array($entities[$main_entity_index], $method_name), array());
-              }
-            }
-          }
-          // 取得したカラムに、全ての主キーが含まれている &&
-          // 既に設定済みのエンティティの全ての主キーの値に、nullが含まれていない &&
-          // 取得したカラムの主キーの値と、既に設定済みのエンティティの主キーの値が同じ
-          if (count($primary_keys) === count($row_values) &&
-              false === in_array(null, $entity_values, true) &&
-              $entity_values === $row_values)
-          {
-            $entity_created = true;
-          }
-        }
-        if (false === $entity_created)
-        {
-          $main_entity = new $this->entity_class_name;
-        }
-        foreach ($associated_entities as $associated_entity_class_name => $value)
-        {
-          require_once(dirname(__FILE__) . DIRECTORY_SEPARATOR . self::ENTITY_CLASS_DIRECTORY . $associated_entity_class_name . '.php');
-          $associated_entity_class = new $associated_entity_class_name;
-          foreach ($row as $column_name => $column_value)
-          {
-            if (true === $associated_entity_class->is_property_exists($column_name))
-            {
-              $method_name = 'set_' . $column_name;
-              call_user_func_array(array($associated_entity_class, $method_name), array($column_value));
-            }
-            if (false === $entity_created &&
-                true === $main_entity->is_property_exists($column_name))
-            {
-              $method_name = 'set_' . $column_name;
-              call_user_func_array(array($main_entity, $method_name), array($column_value));
-            }
-          }
-          $method_name = 'add_' . $associated_entity_class_name;
-          call_user_func_array(array($main_entity, $method_name), array($associated_entity_class));
-        }
-        if (false === $entity_created)
-        {
-          $entities[] = $main_entity;
-        }
+        $this->set_all_entities(
+          $unique_primary_key_data,
+          $result_set['data'],
+          $main_table_meta_data,
+          $entity_class_name,
+          $associated_entities,
+          $associated_tables
+        );
       }
     }
 
-    return $entities;
+    return $this->get_entities();
+  }
+
+  public function get_last_insert_id()
+  {
+    $result = null;
+
+    $statement = $this->get_statement();
+
+    if (null !== $statement)
+    {
+      $result = $statement->insert_id;
+    }
+
+    return $result;
   }
 
   public function begin()
   {
-    $this->get_handle_instance()->beginTransaction();
+    return $this->get_connection()->autocommit(false);
   }
 
   public function commit()
   {
-    $this->get_handle_instance()->commit();
+    return $this->get_connection()->commit();
   }
 
   public function rollback()
   {
-    $this->get_handle_instance()->rollback();
+    return $this->get_connection()->rollback();
+  }
+
+  protected function execute_sql($sql)
+  {
+    $connection = $this->get_connection();
+    $statement = $connection->prepare($sql);
+
+    if (false === $statement)
+    {
+      throw new Exception('SQL文のプリペアに失敗しました');
+    }
+    $this->set_statement($statement);
+
+    // パラメータのデータ型
+    $bind_array = $this->get_converted_bind_types();
+
+    $bind_params = $this->get_bind_params();
+    if (null !== $bind_params)
+    {
+      foreach ($bind_params as $key => $val)
+      {
+        // パラメータの値
+        $bind_array[] = &$bind_params[$key];
+      }
+    }
+
+    $statement = $this->get_statement();
+    if (0 < count($bind_array))
+    {
+      $result = call_user_func_array(array($statement, 'bind_param'), $bind_array);
+
+      if (false === $result)
+      {
+        throw new Exception('SQL文のパラメータのバインドに失敗しました');
+      }
+    }
+
+    $result = $statement->execute();
+
+    return $result;
+  }
+
+  protected function get_table_meta_data($table_name)
+  {
+    // MySQLの場合、結果セットに関するメタデータを取得している
+    $result = array();
+
+    $statement = $this->get_statement();
+
+    if (null !== $statement)
+    {
+      $mysqli_result = $statement->result_metadata();
+      if (false !== $mysqli_result)
+      {
+        $result = $mysqli_result->fetch_fields();
+      }
+    }
+
+    return $result;
+  }
+
+  protected function get_cast_value(array $table_meta_data, $column_name, $column_value)
+  {
+    // MySQLは不要なので何もやらない
+    return $column_value;
+  }
+
+  protected function get_affected_rows()
+  {
+    $result = null;
+
+    $statement = $this->get_statement();
+
+    if (null !== $statement)
+    {
+      $result = $statement->affected_rows;
+    }
+
+    return $result;
+  }
+
+  protected function get_converted_bind_types()
+  {
+    $result = array();
+
+    $bind_types = $this->get_bind_types();
+    if (null !== $bind_types)
+    {
+      foreach ($bind_types as $bind_type)
+      {
+        $result[] = self::$BIND_TYPE_MAPPINGS[$bind_type];
+      }
+    }
+
+    if (0 < count($result))
+    {
+      $result = array(implode('', $result));
+    }
+
+    return $result;
+  }
+
+  protected function get_result_set()
+  {
+    $result = array();
+
+    $statement = $this->get_statement();
+
+    if (null !== $statement)
+    {
+      $res = $statement->store_result();
+      if (false === $res)
+      {
+        throw new Exception('結果セットのバッファへの格納に失敗しました。');
+      }
+
+      if (false === ($meta = $statement->result_metadata()))
+      {
+        throw new Exception('結果セットのメタデータの取得に失敗しました。');
+      }
+
+      $data = array();
+      $columns = array();
+      while ($field = $meta->fetch_field())
+      {
+        $columns[] = &$data[$field->name];
+      }
+
+      $res = call_user_func_array(array($statement, 'bind_result'), $columns);
+      if (false === $res)
+      {
+        throw new Exception('結果セットのバインドに失敗しました。');
+      }
+
+      $this->read_entity_class($this->get_entity_class_name());
+
+      $result['data'] = $data;
+    }
+
+    return $result;
   }
 }
