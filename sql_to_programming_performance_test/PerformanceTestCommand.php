@@ -24,8 +24,6 @@ class PerformanceTestCommand extends Command
 
     private const ITEM_STATUS_VALUE = 7;
 
-    private const ID_BETWEEN = [1, 100000];
-
     /**
      * Create a new command instance.
      *
@@ -55,7 +53,11 @@ class PerformanceTestCommand extends Command
           if (($method === 'chunk' && $argument !== 'null') ||
             ($method === 'chunk_where' && $argument !== 'null') ||
             ($method === 'pdo_chunk' && $argument !== 'null') ||
-            ($method === 'pdo_chunk_where' && $argument !== 'null'))
+            ($method === 'pdo_chunk_where' && $argument !== 'null') ||
+            ($method === 'pdo_chunk_group_by' && $argument !== 'null') ||
+            ($method === 'pdo_chunk_group_by_out' && $argument !== 'null') ||
+            ($method === 'pdo_chunk_order_by' && $argument !== 'null') ||
+            ($method === 'pdo_chunk_order_by_out' && $argument !== 'null'))
           {
             $arguments = array((int) $argument);
           }
@@ -87,22 +89,21 @@ class PerformanceTestCommand extends Command
     // 以下はWHERE
     //------------
 
-    private function pdo_fetch_array()
+    private function pdo_fetch_array_where()
     {
         // 最速（そりゃそうだ）
-        // SQL内でwhereで絞り込まないと、落ちる
-        // FETCH_CLASSにすると、fetchの途中で処理が終わる
         // 以下全てのケースで同じだが、collect()とtoArray()だと前者の方がメモリを食わなさそう（toArrayは途中終了した）なので、
         // 最初は配列に取得データを入れている
         // 大体、以下前後ぐらい
-        // time: 1.053342 memory: 73.160156 MB
+        // time: 0.726253 memory: 56.003906 MB
         $result = [];
         $builder = Item::query()->where('item_status', self::ITEM_STATUS_VALUE);
         $query    = $builder->toSql();
         $bindings = $builder->getBindings();
         $paramTypeList = [\PDO::PARAM_INT];
 
-        $pdo  = \DB::connection()->getPdo();
+        $pdo = $builder->getConnection()->getPdo();
+        $pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
         $stmt = $pdo->prepare($query);
         foreach ($bindings as $idx => $binding) {
             $stmt->bindValue($idx + 1, $binding, $paramTypeList[$idx]);
@@ -121,15 +122,50 @@ class PerformanceTestCommand extends Command
         return $result;
     }
 
-    private function cursor()
+    private function pdo_fetch_array()
+    {
+        // 件数が多くても落ちずに速いので、大量データの時はこれが良いか？
+        // 大体、以下前後ぐらい
+        // time: 1.294815 memory: 56.003906 MB
+        $result = [];
+        $builder = Item::query();
+        $query    = $builder->toSql();
+        $bindings = $builder->getBindings();
+        $paramTypeList = [\PDO::PARAM_INT];
+
+        $pdo = $builder->getConnection()->getPdo();
+        $pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
+        $stmt = $pdo->prepare($query);
+        foreach ($bindings as $idx => $binding) {
+            $stmt->bindValue($idx + 1, $binding, $paramTypeList[$idx]);
+        }
+        $stmt->execute();
+
+        $stmt->setFetchMode(
+            \PDO::FETCH_ASSOC
+        );
+
+        foreach ($stmt as $res) {
+            if ($res['item_status'] === self::ITEM_STATUS_VALUE) {
+                $result[] = $res;
+            }
+        }
+        var_dump(count($result));
+
+        return $result;
+    }
+
+    private function cursor_where()
     {
         // メモリがギリギリっぽいが、書くのが楽なのが大きい
         // あと、中身が配列ではなく、唯一のクラス（Eloquent Modelインスタンス）
-        // SQL内でwhereで絞り込まないと、落ちる
         // 大体、以下前後ぐらい
-        // time: 2.041008 memory: 121.160156 MB
+        // time: 1.316269 memory: 106.003906 MB
         $result = [];
-        foreach (Item::query()->where('item_status', self::ITEM_STATUS_VALUE)->cursor() as $res) {
+        $builder = Item::query()->where('item_status', self::ITEM_STATUS_VALUE);
+        $builder->getConnection()->getPdo()->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
+        $data = $builder->cursor();
+        foreach ($data as $res) {
             $result[] = $res;
         }
         var_dump(count($result));
@@ -137,18 +173,13 @@ class PerformanceTestCommand extends Command
         return $result;
     }
 
-    //-----------
-    // 以下は微妙
-    //-----------
-
     private function pdo_chunk_where($count)
     {
-        // 速度も速く、メモリも食わないが、書くのが面倒なのが痛いので微妙か？
-        // もっとデータ量が多く、上記２つだと無理な場合は有りか
+        // 速度も速く、メモリも食わないが、やや書くのが面倒か
+        // もっとデータ量が多く、上記のケースだと無理な場合は有り？
         // 100000件（1000でも10000でも遅い）ずつ処理
-        // FETCH_CLASSにすると、fetchの途中で処理が終わる
         // 大体、以下前後ぐらい
-        // time: 1.469098 memory: 73.160156 MB
+        // time: 1.331202 memory: 56.003906 MB
         $result = [];
         $offset = 0;
         while (true) {
@@ -157,7 +188,8 @@ class PerformanceTestCommand extends Command
             $bindings = $builder->getBindings();
             $paramTypeList = [\PDO::PARAM_INT];
 
-            $pdo  = \DB::connection()->getPdo();
+            $pdo = $builder->getConnection()->getPdo();
+            $pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
             $stmt = $pdo->prepare($query);
             foreach ($bindings as $idx => $binding) {
                 $stmt->bindValue($idx + 1, $binding, $paramTypeList[$idx]);
@@ -187,10 +219,9 @@ class PerformanceTestCommand extends Command
 
     private function pdo_chunk($count)
     {
-        // 100000件（1000でも10000でも遅い）ずつ処理
-        // FETCH_CLASSにすると、fetchの途中で処理が終わる
+        // 1000000件（1000でも10000でも100000でも遅い）ずつ処理
         // 大体、以下前後ぐらい
-        // time: 5.472522 memory: 77.160156 MB
+        // time: 1.892999 memory: 56.003906 MB
         $result = [];
         $offset = 0;
         while (true) {
@@ -198,7 +229,8 @@ class PerformanceTestCommand extends Command
             $query    = $builder->toSql();
             $bindings = $builder->getBindings();
 
-            $pdo  = \DB::connection()->getPdo();
+            $pdo = $builder->getConnection()->getPdo();
+            $pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
             $stmt = $pdo->prepare($query);
             $stmt->execute($bindings);
 
@@ -227,13 +259,19 @@ class PerformanceTestCommand extends Command
         return $result;
     }
 
+    //-----------
+    // 以下は微妙
+    //-----------
+
     private function chunk_where($count)
     {
         // 10000件（1000でも100000でも遅い）ずつ処理して、何とかエラーにならずに動作したが、メモリはギリギリっぽい
         // 大体、以下前後ぐらい
-        // time: 5.411107 memory: 110.003906 MB
+        // time: 5.317001 memory: 110.003906 MB
         $result = [];
-        Item::query()->where('item_status', self::ITEM_STATUS_VALUE)->orderBy('id')->chunk(
+        $builder = Item::query()->where('item_status', self::ITEM_STATUS_VALUE)->orderBy('id');
+        $builder->getConnection()->getPdo()->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
+        $builder->chunk(
             $count,
             function ($queryResults) use (&$result) {
                 foreach ($queryResults as $res) {
@@ -248,18 +286,23 @@ class PerformanceTestCommand extends Command
 
     private function cursor_pk()
     {
-        // SQL内でwhereで絞り込まないと、落ちる
         // 大体、以下前後ぐらい
-        // time: 5.389896 memory: 118.007812 MB
+        // time: 4.948090 memory: 120.007812 MB
         $pkResult = [];
-        foreach (Item::query()->select(['id'])->where('item_status', self::ITEM_STATUS_VALUE)->cursor() as $res) {
+        $builder = Item::query()->select(['id'])->where('item_status', self::ITEM_STATUS_VALUE);
+        $builder->getConnection()->getPdo()->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
+        $data = $builder->cursor();
+        foreach ($data as $res) {
           $pkResult[] = $res->id;
         }
 
         $chunk = array_chunk($pkResult, 100);
         $result = [];
         foreach ($chunk as $pkList) {
-            foreach (Item::query()->whereIn('id', $pkList)->cursor() as $res) {
+            $builder = Item::query()->whereIn('id', $pkList);
+            $builder->getConnection()->getPdo()->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
+            $data = $builder->cursor();
+            foreach ($data as $res) {
                 $result[] = $res;
             }
         }
@@ -272,13 +315,33 @@ class PerformanceTestCommand extends Command
     // 以下は、完全にNG
     //-----------------
 
+    private function cursor()
+    {
+        // 大体、以下前後ぐらい
+        // time: 17.833993 memory: 106.003906 MB
+        $result = [];
+        $builder = Item::query();
+        $builder->getConnection()->getPdo()->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
+        $data = $builder->cursor();
+        foreach ($data as $res) {
+            if ($res->item_status === self::ITEM_STATUS_VALUE) {
+                $result[] = $res;
+            }
+        }
+        var_dump(count($result));
+
+        return $result;
+    }
+
     private function chunk($count)
     {
         // 10000件（1000でも100000でも遅い）ずつ処理して、何とかエラーにならずに動作したが、メモリはギリギリっぽい
         // 大体、以下前後ぐらい
-        // time: 43.878615 memory: 116.003906 MB
+        // time: 42.927657 memory: 116.003906 MB
         $result = [];
-        Item::query()->orderBy('id')->chunk(
+        $builder = Item::query()->orderBy('id');
+        $builder->getConnection()->getPdo()->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
+        $builder->chunk(
             $count,
             function ($queryResults) use (&$result) {
                 foreach ($queryResults as $res) {
@@ -306,7 +369,12 @@ class PerformanceTestCommand extends Command
         // メモリ不足で落ちもしないが、return文まで処理も進まない
         // エラーも出ない
         // 何が起きている？
-        $result = Item::query()->where('item_status', self::ITEM_STATUS_VALUE)->get()->toArray();
+        $builder = Item::query()->where('item_status', self::ITEM_STATUS_VALUE);
+        $builder->getConnection()->getPdo()->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
+        $result = $builder->get()->toArray();
+
+        var_dump(count($result));
+
         return $result;
     }
 
@@ -315,7 +383,12 @@ class PerformanceTestCommand extends Command
         // PKだけ取得でも、上記と変わらない
         // エラーも出ない
         // 何が起きている？
-        $result = Item::query()->select(['id'])->where('item_status', self::ITEM_STATUS_VALUE)->get()->toArray();
+        $builder = Item::query()->select(['id'])->where('item_status', self::ITEM_STATUS_VALUE);
+        $builder->getConnection()->getPdo()->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
+        $result = $builder->get()->toArray();
+
+        var_dump(count($result));
+
         return $result;
     }
 
@@ -329,7 +402,8 @@ class PerformanceTestCommand extends Command
         $bindings = $builder->getBindings();
         $paramTypeList = [\PDO::PARAM_INT];
 
-        $pdo  = \DB::connection()->getPdo();
+        $pdo = $builder->getConnection()->getPdo();
+        $pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
         $stmt = $pdo->prepare($query);
         foreach ($bindings as $idx => $binding) {
             $stmt->bindValue($idx + 1, $binding, $paramTypeList[$idx]);
@@ -359,7 +433,8 @@ class PerformanceTestCommand extends Command
         $bindings = $builder->getBindings();
         $paramTypeList = [\PDO::PARAM_INT];
 
-        $pdo  = \DB::connection()->getPdo();
+        $pdo = $builder->getConnection()->getPdo();
+        $pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
         $stmt = $pdo->prepare($query);
         foreach ($bindings as $idx => $binding) {
             $stmt->bindValue($idx + 1, $binding, $paramTypeList[$idx]);
@@ -389,7 +464,8 @@ class PerformanceTestCommand extends Command
         $bindings = $builder->getBindings();
         $paramTypeList = [\PDO::PARAM_INT];
 
-        $pdo  = \DB::connection()->getPdo();
+        $pdo = $builder->getConnection()->getPdo();
+        $pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
         $stmt = $pdo->prepare($query);
         foreach ($bindings as $idx => $binding) {
             $stmt->bindValue($idx + 1, $binding, $paramTypeList[$idx]);
@@ -418,20 +494,16 @@ class PerformanceTestCommand extends Command
 
     private function pdo_fetch_array_group_by()
     {
-        // SQL内でwhereで絞り込まないと、落ちるので、最初にidでレコードを絞っている
         // 大体、以下前後ぐらい
-        // time: 0.091602 memory: 12.000000 MB
+        // time: 0.634974 memory: 12.000000 MB
         $result = [];
-        $builder = Item::query()->select(['item_status'])->whereBetween('id', self::ID_BETWEEN)->groupBy('item_status');
+        $builder = Item::query()->select(['item_status'])->groupBy('item_status');
         $query    = $builder->toSql();
-        $bindings = $builder->getBindings();
-        $paramTypeList = [\PDO::PARAM_INT, \PDO::PARAM_INT];
 
-        $pdo  = \DB::connection()->getPdo();
+        $pdo = $builder->getConnection()->getPdo();
+        $pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
         $stmt = $pdo->prepare($query);
-        foreach ($bindings as $idx => $binding) {
-            $stmt->bindValue($idx + 1, $binding, $paramTypeList[$idx]);
-        }
+
         $stmt->execute();
 
         $stmt->setFetchMode(
@@ -454,20 +526,16 @@ class PerformanceTestCommand extends Command
 
     private function pdo_fetch_array_group_by_out()
     {
-        // SQL内でwhereで絞り込まないと、落ちるので、最初にidでレコードを絞っている
         // 大体、以下前後ぐらい
-        // time: 0.124188 memory: 16.000000 MB
+        // time: 0.677400 memory: 12.000000 MB
         $result = [];
-        $builder = Item::query()->select(['item_status'])->whereBetween('id', self::ID_BETWEEN);
+        $builder = Item::query()->select(['item_status']);
         $query    = $builder->toSql();
-        $bindings = $builder->getBindings();
-        $paramTypeList = [\PDO::PARAM_INT, \PDO::PARAM_INT];
 
-        $pdo  = \DB::connection()->getPdo();
+        $pdo = $builder->getConnection()->getPdo();
+        $pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
         $stmt = $pdo->prepare($query);
-        foreach ($bindings as $idx => $binding) {
-            $stmt->bindValue($idx + 1, $binding, $paramTypeList[$idx]);
-        }
+
         $stmt->execute();
 
         $stmt->setFetchMode(
@@ -494,12 +562,14 @@ class PerformanceTestCommand extends Command
 
     private function cursor_group_by()
     {
-        // SQL内でwhereで絞り込まないと、落ちるので、最初にidでレコードを絞っている
         // 大体、以下前後ぐらい
-        // time: 0.091089 memory: 12.000000 MB
+        // time: 0.633010 memory: 12.000000 MB
         $result = [];
         $sort = [];
-        foreach (Item::query()->select(['item_status'])->whereBetween('id', self::ID_BETWEEN)->groupBy('item_status')->cursor() as $res) {
+        $builder = Item::query()->select(['item_status'])->groupBy('item_status');
+        $builder->getConnection()->getPdo()->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
+        $data = $builder->cursor();
+        foreach ($data as $res) {
             $result[] = $res;
             $sort[] = $res->item_status;
         }
@@ -514,18 +584,117 @@ class PerformanceTestCommand extends Command
 
     private function cursor_group_by_out()
     {
-        // SQL内でwhereで絞り込まないと、落ちるので、最初にidでレコードを絞っている
         // 大体、以下前後ぐらい
-        // time: 1.624074 memory: 16.000000 MB
+        // time: 16.706213 memory: 12.000000 MB
         $result = [];
         $itemStatusList = [];
         $sort = [];
-        foreach (Item::query()->select(['item_status'])->whereBetween('id', self::ID_BETWEEN)->cursor() as $res) {
+        $builder = Item::query()->select(['item_status']);
+        $builder->getConnection()->getPdo()->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
+        $data = $builder->cursor();
+        foreach ($data as $res) {
             if (array_key_exists($res->item_status, $itemStatusList) === false) {
                 $result[] = $res;
                 $itemStatusList[$res->item_status] = true;
                 $sort[] = $res->item_status;
             }
+        }
+
+        // 他のケースとデータ内容を合わせる為にソート
+        array_multisort($sort, SORT_ASC, $result);
+
+        var_dump(count($result));
+
+        return $result;
+    }
+
+    private function pdo_chunk_group_by($count)
+    {
+        // 10件（総件数）ずつ処理なので、実質１回のSQL実行
+        // 大体、以下前後ぐらい
+        // time: 1.255493 memory: 12.000000 MB
+        $result = [];
+        $sort = [];
+        $offset = 0;
+        while (true) {
+            $builder = Item::query()->select(['item_status'])->groupBy('item_status')->offset($offset)->limit($count);
+            $query    = $builder->toSql();
+
+            $pdo = $builder->getConnection()->getPdo();
+            $pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
+            $stmt = $pdo->prepare($query);
+
+            $stmt->execute();
+
+            $stmt->setFetchMode(
+                \PDO::FETCH_ASSOC
+            );
+
+            // 終了判定をする為、最初の１件は別に扱う
+            $firstRes = $stmt->fetch();
+            if ($firstRes === false) {
+                break;
+            } else {
+                $result[] = $firstRes;
+                $sort[] = $firstRes['item_status'];
+                while (false !== ($res = $stmt->fetch())) {
+                    $result[] = $res;
+                    $sort[] = $res['item_status'];
+                }
+            }
+            $offset += $count;
+        }
+
+        // 他のケースとデータ内容を合わせる為にソート
+        array_multisort($sort, SORT_ASC, $result);
+
+        var_dump(count($result));
+
+        return $result;
+    }
+
+    private function pdo_chunk_group_by_out($count)
+    {
+        // 1000000件（総件数）ずつ処理なので、実質１回のSQL実行
+        // 大体、以下前後ぐらい
+        // time: 1.110508 memory: 12.000000 MB
+        $result = [];
+        $itemStatusList = [];
+        $sort = [];
+        $offset = 0;
+        while (true) {
+            $builder = Item::query()->select(['item_status'])->offset($offset)->limit($count);
+            $query    = $builder->toSql();
+
+            $pdo = $builder->getConnection()->getPdo();
+            $pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
+            $stmt = $pdo->prepare($query);
+
+            $stmt->execute();
+
+            $stmt->setFetchMode(
+                \PDO::FETCH_ASSOC
+            );
+
+            // 終了判定をする為、最初の１件は別に扱う
+            $firstRes = $stmt->fetch();
+            if ($firstRes === false) {
+                break;
+            } else {
+                if (array_key_exists($firstRes['item_status'], $itemStatusList) === false) {
+                    $result[] = $firstRes;
+                    $itemStatusList[$firstRes['item_status']] = true;
+                    $sort[] = $firstRes['item_status'];
+                }
+                while (false !== ($res = $stmt->fetch())) {
+                    if (array_key_exists($res['item_status'], $itemStatusList) === false) {
+                        $result[] = $res;
+                        $itemStatusList[$res['item_status']] = true;
+                        $sort[] = $res['item_status'];
+                    }
+                }
+            }
+            $offset += $count;
         }
 
         // 他のケースとデータ内容を合わせる為にソート
@@ -544,18 +713,20 @@ class PerformanceTestCommand extends Command
     {
         // SQL内でwhereで絞り込まないと落ちるので絞っている
         // 大体、以下前後ぐらい
-        // time: 0.973760 memory: 73.160156 MB
+        // time: 0.638547 memory: 52.003906 MB
         $result = [];
-        $builder = Item::query()->where('item_status', self::ITEM_STATUS_VALUE)->orderByDesc('created_at');
+        $builder = Item::query()->select(['created_at'])->where('item_status', self::ITEM_STATUS_VALUE)->orderByDesc('created_at');
         $query    = $builder->toSql();
         $bindings = $builder->getBindings();
         $paramTypeList = [\PDO::PARAM_INT];
 
-        $pdo  = \DB::connection()->getPdo();
+        $pdo = $builder->getConnection()->getPdo();
+        $pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
         $stmt = $pdo->prepare($query);
         foreach ($bindings as $idx => $binding) {
             $stmt->bindValue($idx + 1, $binding, $paramTypeList[$idx]);
         }
+
         $stmt->execute();
 
         $stmt->setFetchMode(
@@ -574,18 +745,20 @@ class PerformanceTestCommand extends Command
     {
         // SQL内でwhereで絞り込まないと落ちるので絞っている
         // 大体、以下前後ぐらい
-        // time: 0.951160 memory: 85.164062 MB
+        // time: 0.556800 memory: 66.007812 MB
         $result = [];
-        $builder = Item::query()->where('item_status', self::ITEM_STATUS_VALUE);
+        $builder = Item::query()->select(['created_at'])->where('item_status', self::ITEM_STATUS_VALUE);
         $query    = $builder->toSql();
         $bindings = $builder->getBindings();
         $paramTypeList = [\PDO::PARAM_INT];
 
-        $pdo  = \DB::connection()->getPdo();
+        $pdo = $builder->getConnection()->getPdo();
+        $pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
         $stmt = $pdo->prepare($query);
         foreach ($bindings as $idx => $binding) {
             $stmt->bindValue($idx + 1, $binding, $paramTypeList[$idx]);
         }
+
         $stmt->execute();
 
         $stmt->setFetchMode(
@@ -609,9 +782,12 @@ class PerformanceTestCommand extends Command
     {
         // SQL内でwhereで絞り込まないと落ちるので絞っている
         // 大体、以下前後ぐらい
-        // time: 1.983831 memory: 121.160156 MB
+        // time: 1.657633 memory: 102.003906 MB
         $result = [];
-        foreach (Item::query()->where('item_status', self::ITEM_STATUS_VALUE)->orderByDesc('created_at')->cursor() as $res) {
+        $builder = Item::query()->select(['created_at'])->where('item_status', self::ITEM_STATUS_VALUE)->orderByDesc('created_at');
+        $builder->getConnection()->getPdo()->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
+        $data = $builder->cursor();
+        foreach ($data as $res) {
             $result[] = $res;
         }
 
@@ -622,19 +798,116 @@ class PerformanceTestCommand extends Command
 
     private function cursor_order_by_out()
     {
-        // NGケース
-        // ソート用のデータを作る途中で、処理が終わる
         // SQL内でwhereで絞り込まないと落ちるので絞っている
+        // 大体、以下前後ぐらい
+        // time: 5.254312 memory: 116.007812 MB
         $result = [];
         $sort = [];
-        foreach (Item::query()->where('item_status', self::ITEM_STATUS_VALUE)->cursor() as $res) {
+        $builder = Item::query()->select(['created_at'])->where('item_status', self::ITEM_STATUS_VALUE);
+        $builder->getConnection()->getPdo()->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
+        $data = $builder->cursor();
+        foreach ($data as $res) {
             $result[] = $res;
-            $sort[] = $res->created_at;
-            var_dump(count($result));
+            $sort[] = $res->created_at->timestamp;
         }
 
         // 他のケースとデータ内容を合わせる為にソート
         array_multisort($sort, SORT_DESC, $result);
+
+        var_dump(count($result));
+
+        return $result;
+    }
+
+    private function pdo_chunk_order_by($count)
+    {
+        // SQL内でwhereで絞り込まないと落ちるので絞っている
+        // 100000件（総件数）ずつ処理なので、実質１回のSQL実行
+        // 大体、以下前後ぐらい
+        // time: 1.173046 memory: 52.003906 MB
+        $result = [];
+        $offset = 0;
+        while (true) {
+            $builder = Item::query()->select(['created_at'])->where('item_status', self::ITEM_STATUS_VALUE)->orderByDesc('created_at')->offset($offset)->limit($count);
+            $query    = $builder->toSql();
+            $bindings = $builder->getBindings();
+            $paramTypeList = [\PDO::PARAM_INT];
+
+            $pdo = $builder->getConnection()->getPdo();
+            $pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
+            $stmt = $pdo->prepare($query);
+            foreach ($bindings as $idx => $binding) {
+              $stmt->bindValue($idx + 1, $binding, $paramTypeList[$idx]);
+            }
+
+            $stmt->execute();
+
+            $stmt->setFetchMode(
+                \PDO::FETCH_ASSOC
+            );
+
+            // 終了判定をする為、最初の１件は別に扱う
+            $firstRes = $stmt->fetch();
+            if ($firstRes === false) {
+                break;
+            } else {
+                $result[] = $firstRes;
+                while (false !== ($res = $stmt->fetch())) {
+                    $result[] = $res;
+                }
+            }
+            $offset += $count;
+        }
+
+        var_dump(count($result));
+
+        return $result;
+    }
+
+    private function pdo_chunk_order_by_out($count)
+    {
+        // 100000件（総件数）ずつ処理なので、実質１回のSQL実行
+        // 大体、以下前後ぐらい
+        // time: 0.961903 memory: 66.007812 MB
+        $result = [];
+        $sort = [];
+        $offset = 0;
+        while (true) {
+            $builder = Item::query()->select(['created_at'])->where('item_status', self::ITEM_STATUS_VALUE)->offset($offset)->limit($count);
+            $query    = $builder->toSql();
+            $bindings = $builder->getBindings();
+            $paramTypeList = [\PDO::PARAM_INT];
+
+            $pdo = $builder->getConnection()->getPdo();
+            $pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
+            $stmt = $pdo->prepare($query);
+            foreach ($bindings as $idx => $binding) {
+                $stmt->bindValue($idx + 1, $binding, $paramTypeList[$idx]);
+            }
+
+            $stmt->execute();
+
+            $stmt->setFetchMode(
+                \PDO::FETCH_ASSOC
+            );
+
+            // 終了判定をする為、最初の１件は別に扱う
+            $firstRes = $stmt->fetch();
+            if ($firstRes === false) {
+                break;
+            } else {
+                $result[] = $firstRes;
+                $sort[] = $firstRes['created_at'];
+                while (false !== ($res = $stmt->fetch())) {
+                    $result[] = $res;
+                    $sort[] = $res['created_at'];
+                }
+            }
+            $offset += $count;
+        }
+
+        // 他のケースとデータ内容を合わせる為にソート
+        array_multisort($sort, SORT_ASC, $result);
 
         var_dump(count($result));
 

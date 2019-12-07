@@ -21,6 +21,9 @@ SQLで行う処理と、プログラムで行った時の処理速度とメモ�
 
 また、以下のサイトも参考にしました。感謝を申し上げます。
 
+Laravelのcursorとchunkの違いとバッファクエリの対処法
+http://honeplus.blog50.fc2.com/blog-entry-219.html
+
 Laravel(Eloquent): chunk() vs cursor()
 https://qiita.com/ryo511/items/ebcd1c1b2ad5addc5c9d
 
