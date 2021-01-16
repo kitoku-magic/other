@@ -42,46 +42,46 @@ class PerformanceTestCommand extends Command
     public function handle()
     {
         try {
-          error_reporting(-1);
-          // php.iniのデフォルト値にしてみた
-          ini_set('memory_limit', '128M');
+            error_reporting(-1);
+            // php.iniのデフォルト値にしてみた
+            ini_set('memory_limit', '128M');
 
-          $method = $this->argument('method');
-          $argument = $this->argument('argument');
+            $method = $this->argument('method');
+            $argument = $this->argument('argument');
 
-          // chunk系のケースは、何件ずつ処理するかを引数で渡す
-          if (($method === 'chunk' && $argument !== 'null') ||
-            ($method === 'chunk_where' && $argument !== 'null') ||
-            ($method === 'pdo_chunk' && $argument !== 'null') ||
-            ($method === 'pdo_chunk_where' && $argument !== 'null') ||
-            ($method === 'pdo_chunk_group_by' && $argument !== 'null') ||
-            ($method === 'pdo_chunk_group_by_out' && $argument !== 'null') ||
-            ($method === 'pdo_chunk_order_by' && $argument !== 'null') ||
-            ($method === 'pdo_chunk_order_by_out' && $argument !== 'null'))
-          {
-            $arguments = array((int) $argument);
-          }
-          else
-          {
-            $arguments = array();
-          }
+            // chunk系のケースは、何件ずつ処理するかを引数で渡す
+            if (($method === 'chunk' && $argument !== 'null') ||
+                ($method === 'chunk_where' && $argument !== 'null') ||
+                ($method === 'pdo_chunk' && $argument !== 'null') ||
+                ($method === 'pdo_chunk_where' && $argument !== 'null') ||
+                ($method === 'pdo_chunk_group_by' && $argument !== 'null') ||
+                ($method === 'pdo_chunk_group_by_out' && $argument !== 'null') ||
+                ($method === 'pdo_chunk_order_by' && $argument !== 'null') ||
+                ($method === 'pdo_chunk_order_by_out' && $argument !== 'null'))
+            {
+                $arguments = array((int) $argument);
+            }
+            else
+            {
+                $arguments = array();
+            }
 
-          $start = microtime(true);
+            $start = microtime(true);
 
-          $ret = call_user_func_array(array($this, $method), $arguments);
-          //var_dump($ret);
+            $ret = call_user_func_array(array($this, $method), $arguments);
+            //var_dump($ret);
 
-          $time = microtime(true) - $start;
-          $memory = memory_get_peak_usage(true) / 1024 / 1024;
+            $time = microtime(true) - $start;
+            $memory = memory_get_peak_usage(true) / 1024 / 1024;
 
-          $this->output->writeln(sprintf('time: %f memory: %f MB', $time, $memory));
+            $this->output->writeln(sprintf('time: %f memory: %f MB', $time, $memory));
         }
         catch (\Error $e) {
-          $exception = new \Exception($e->getMessage(), $e->getCode, $e);
-          throw $exception;
+            $exception = new \Exception($e->getMessage(), $e->getCode, $e);
+            throw $exception;
         }
         catch (\Exception $e) {
-          var_dump($e);
+            var_dump($e);
         }
     }
 
@@ -293,7 +293,7 @@ class PerformanceTestCommand extends Command
         $builder->getConnection()->getPdo()->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
         $data = $builder->cursor();
         foreach ($data as $res) {
-          $pkResult[] = $res->id;
+            $pkResult[] = $res->id;
         }
 
         $chunk = array_chunk($pkResult, 100);
@@ -837,7 +837,7 @@ class PerformanceTestCommand extends Command
             $pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
             $stmt = $pdo->prepare($query);
             foreach ($bindings as $idx => $binding) {
-              $stmt->bindValue($idx + 1, $binding, $paramTypeList[$idx]);
+                $stmt->bindValue($idx + 1, $binding, $paramTypeList[$idx]);
             }
 
             $stmt->execute();
@@ -913,5 +913,148 @@ class PerformanceTestCommand extends Command
 
         return $result;
     }
-}
 
+    private function prepared_statement_contains_too_many_placeholders_error()
+    {
+        // プレースホルダ数が65536以上なので、エラーになるケース
+        // 実行時間は、エラーの為、計測できず
+        $ids = [];
+        for ($i = 1; $i <= 65536; $i++)
+        {
+            $ids[] = $i;
+        }
+        $builder = Item::query()->select(['id'])->whereIn('id', $ids);
+        try
+        {
+            $result = $builder->get();
+            var_dump($result->count());
+        }
+        catch (\Exception $e)
+        {
+            $result = $e->getMessage();
+            var_dump($result);
+        }
+
+        return $result;
+    }
+
+    private function prepared_statement_contains_too_many_placeholders_success_dynamic_placeholder()
+    {
+        // プレースホルダ数が65536以上だが、動的プレースホルダにするケース
+        // time: 56.327581 memory: 112.019531 MB
+        $ids = [];
+        for ($i = 1; $i <= 65536; $i++)
+        {
+            $ids[] = $i;
+        }
+        $builder = Item::query()->select(['id'])->whereIn('id', $ids);
+        $builder->getConnection()->getPdo()->setAttribute(\PDO::ATTR_EMULATE_PREPARES, true);
+        try
+        {
+            $result = $builder->get();
+            var_dump($result->count());
+            var_dump(implode(',', $result->pluck('id')->toArray()));
+        }
+        catch (\Exception $e)
+        {
+            $result = $e->getMessage();
+            var_dump($result);
+        }
+
+        return $result;
+    }
+
+    private function prepared_statement_contains_too_many_placeholders_success_not_placeholder()
+    {
+        // プレースホルダ数が65536以上だが、プレースホルダにしないケース
+        // time: 1.764045 memory: 98.015625 MB
+        $ids = [];
+        for ($i = 1; $i <= 65536; $i++)
+        {
+            $ids[] = $i;
+        }
+        // エラーにする為の値
+        //$ids[] = true;
+
+        $is_error = false;
+        foreach ($ids as $id)
+        {
+            // 0以上の正の整数じゃなければエラーにする
+            if (is_int($id) === false && is_string($id) === false)
+            {
+                $is_error = true;
+            }
+            else
+            {
+                if (ctype_digit(strval($id)) === false)
+                {
+                    $is_error = true;
+                }
+            }
+            if ($is_error === true)
+            {
+                break;
+            }
+        }
+
+        if ($is_error === false)
+        {
+            $where = 'id in(' . implode(', ', $ids) . ')';
+            $builder = Item::query()->select(['id'])->whereRaw($where);
+            try
+            {
+                $result = $builder->get();
+                var_dump($result->count());
+                var_dump(implode(',', $result->pluck('id')->toArray()));
+            }
+            catch (\Exception $e)
+            {
+                $result = $e->getMessage();
+                var_dump($result);
+            }
+        }
+        else
+        {
+            $result = "0以上の正の整数以外が含まれています。";
+            var_dump($result);
+        }
+
+        return $result;
+    }
+
+    private function prepared_statement_contains_too_many_placeholders_success_array_chunk()
+    {
+        // プレースホルダ数が65536以上だが、chunkをしてSQLを分割するケース
+        // time: 2.901407 memory: 80.015625 MB
+        $ids = [];
+        for ($i = 1; $i <= 65536; $i++)
+        {
+            $ids[] = $i;
+        }
+
+        $ids_chunks = array_chunk($ids, 1000);
+        $result_collection = collect();
+        foreach ($ids_chunks as $ids_chunk)
+        {
+            $builder = Item::query()->select(['id'])->whereIn('id', $ids_chunk);
+            // 以下をコメントアウトすると、0.3～0.4秒程速くなった
+            //$builder->getConnection()->getPdo()->setAttribute(\PDO::ATTR_EMULATE_PREPARES, true);
+            try
+            {
+                $result = $builder->get();
+                var_dump($result->count());
+                $result_collection = $result_collection->merge($result);
+            }
+            catch (\Exception $e)
+            {
+                $result = $e->getMessage();
+                var_dump($result);
+            }
+        }
+
+        var_dump($result_collection->count());
+        var_dump(implode(',', $result_collection->pluck('id')->toArray()));
+
+        return $result;
+    }
+}
