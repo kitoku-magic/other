@@ -1,6 +1,6 @@
 <?php
 
-// PHP7.4.7
+// PHP7.4.7にて検証
 
 class foo
 {
@@ -17,6 +17,8 @@ try
   // '0'
   // ''
   // 未定義の変数
+
+  // 検証用の値を全て含んだ配列
   $empty_values = [
     // bool
     true,
@@ -71,6 +73,8 @@ try
     '',
   ];
 
+  echo "--------------------改善前--------------------\n";
+
   // empty関数での判定結果を出力
   foreach ($empty_values as $empty_value)
   {
@@ -82,6 +86,8 @@ try
   unlink('/tmp/test');
 
   echo '存在しない変数 is ' . var_export(empty($not_exist), true) . "\n";
+
+  echo "--------------------改善後--------------------\n";
 
   // 以下からが改善案（結果は、上記と全く同じ）
   foreach ($empty_values as $empty_value)
@@ -128,6 +134,8 @@ try
 
   echo '存在しない変数 is ' . var_export(isset($not_exist) === false, true) . "\n";
 
+  echo "--------------------「is_null」の速度調査--------------------\n";
+
   // おまけ：「is_null」と「=== null」での比較調査（一千万件で以下なので、正直誤差レベルかと）
   ini_set('memory_limit', -1);
   $null_values = array_fill(0, 10000000, null);
@@ -140,6 +148,9 @@ try
   }
   // time: 0.24362707138062（上記の、「 === true」を省略すると、time: 0.17196798324585）
   echo 'time: ' . (microtime(true) - $start) . "\n";
+
+  echo "--------------------「 === null」の速度調査--------------------\n";
+
   $start = microtime(true);
   foreach ($null_values as $null_value)
   {
@@ -148,6 +159,102 @@ try
     }
   }
   // time: 0.19953608512878
+  echo 'time: ' . (microtime(true) - $start) . "\n";
+
+  while (count($empty_values) <= 10000000)
+  {
+    $empty_values = array_merge($empty_values, $empty_values);
+  }
+
+  echo "--------------------「empty」の速度調査--------------------\n";
+
+  // empty関数での判定時間
+  $start = microtime(true);
+  foreach ($empty_values as $empty_value)
+  {
+    if (empty($empty_value) === true)
+    {
+    }
+  }
+  // time: 0.68598699569702（速度は優位の模様）
+  echo 'time: ' . (microtime(true) - $start) . "\n";
+
+  echo "--------------------「改善案」の速度調査--------------------\n";
+
+  $start = microtime(true);
+  foreach ($empty_values as $empty_value)
+  {
+    // bool
+    if (is_bool($empty_value) === true)
+    {
+      if ($empty_value === false)
+      {
+      }
+    }
+    // int
+    else if (is_int($empty_value) === true)
+    {
+      if ($empty_value === 0)
+      {
+      }
+    }
+    // float
+    else if (is_float($empty_value) === true)
+    {
+      if ($empty_value === 0.0)
+      {
+      }
+    }
+    // array
+    else if (is_array($empty_value) === true)
+    {
+      if (count($empty_value) === 0)
+      {
+      }
+    }
+    // object
+    else if (is_object($empty_value) === true)
+    {
+      if ($empty_value === null)
+      {
+      }
+    }
+    // null
+    else if (is_null($empty_value) === true)
+    {
+      if ($empty_value === null)
+      {
+      }
+    }
+    // string
+    else if (is_string($empty_value) === true)
+    {
+      if ($empty_value === '' || $empty_value === '0')
+      {
+      }
+    }
+  }
+  // time: 2.3314671516418（型チェックもしているから当然か）
+  echo 'time: ' . (microtime(true) - $start) . "\n";
+
+  echo "--------------------「改善案（１回のif文）」の速度調査--------------------\n";
+
+  $start = microtime(true);
+  foreach ($empty_values as $empty_value)
+  {
+    if (
+      ($empty_value === false) ||
+      ($empty_value === 0) ||
+      ($empty_value === 0.0) ||
+      (is_array($empty_value) === true && count($empty_value) === 0) ||
+      ($empty_value === null) ||
+      ($empty_value === '') ||
+      ($empty_value === '0')
+    )
+    {
+    }
+  }
+  // time: 3.2414071559906（判定回数が多くなるので当然か）
   echo 'time: ' . (microtime(true) - $start) . "\n";
 }
 finally
