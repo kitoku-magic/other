@@ -2,6 +2,14 @@
 
 // PHP7.4.15にて検証
 
+// 改善案は、基本的には以下が良い（データ型によって異なる）
+// $is_numeric_valueが、元々is_numeric()の引数に渡していた変数
+// int型（負の数値も許容する場合） → 「is_int($is_numeric_value)」
+// int型（0以上のみ許容する場合） → 「$is_numeric_value >= 0」
+// float型（負の数値も許容する場合）（ただ、INFもNANもtrueになる） → 「is_float($is_numeric_value)」
+// float型（0以上のみ許容する場合）（ただ、INFはtrueになる） → 「$is_numeric_value >= 0」
+// string型 → いずれのチェック方法も欠点がそれなりにあるので、値に応じてintval()かfloatval()でキャストしてから、チェックした方が良い
+
 class foo
 {
 }

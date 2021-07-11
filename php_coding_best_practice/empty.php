@@ -2,6 +2,17 @@
 
 // PHP7.4.15にて検証
 
+// 改善案は、以下（データ型によって異なる）
+// $empty_valueが、元々empty()の引数に渡していた変数
+// bool型 → 「$empty_value === false」
+// int型 → 「$empty_value === 0」
+// float型 → 「$empty_value === 0.0」
+// array型 → 「count($empty_value) === 0」
+// object型 → 「$empty_value === null」
+// null型（型ではないので、nullチェック目的の時） → 「$empty_value === null」
+// string型 → 「$empty_value === '' || $empty_value === '0'」
+// 変数の存在チェック → 「isset($empty_value) === false」
+
 class foo
 {
 }
