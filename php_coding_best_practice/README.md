@@ -17,3 +17,8 @@ PHPの組み込み関数の中で、
 同ディレクトリ内の「is_numeric.php」に加え、
 
 こちら https://kitoku-magic.hatenablog.com/entry/2021/02/14/190535 に考察記事も書いています。
+
+### in_array()
+同ディレクトリ内の「in_array.php」に加え、
+
+こちら https://kitoku-magic.hatenablog.com/entry/2021/07/12/210910 に考察記事も書いています。

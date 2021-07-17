@@ -431,9 +431,7 @@ try
   // Part3. 値から二次元配列を検索するケース
   //----------------------------------------
   // 以下のどれかが推奨（上から推奨順）
-  // for
-  // in_array 第３引数有り
-  // array_search 第３引数有り
+  // in_array 第一引数配列
   echo "値から二次元配列を検索するケース\n";
 
   $from = 1;
@@ -626,6 +624,20 @@ try
   }
   // time: 0.18004214763641
   echo 'array_diff_key time: ' . (array_sum($times) / count($times)) . "\n";
+  unset($id);
+  unset($new_ids);
+
+  // in_array 第一引数配列
+  $times = [];
+  for ($i = 0; $i < $exec_count; $i++) {
+    $id = strval(mt_rand($from, $to));
+    $start = microtime(true);
+    if (in_array(['id' => $id], $ids, true)) {
+    }
+    $times[] = microtime(true) - $start;
+  }
+  // time: 0.047339403629303
+  echo 'in_array 第一引数配列 time: ' . (array_sum($times) / count($times)) . "\n";
 
   unset($id);
   unset($ids);
@@ -840,6 +852,19 @@ try
   }
   // time: 0.000002.2411346435547
   echo 'array_diff_key time: ' . (array_sum($times) / count($times)) . "\n";
+  unset($id);
+
+  // in_array 第一引数配列
+  $times = [];
+  for ($i = 0; $i < $exec_count; $i++) {
+    $id = strval(mt_rand($from, $to));
+    $start = microtime(true);
+    if (in_array(['id' => $id], $ids, true)) {
+    }
+    $times[] = microtime(true) - $start;
+  }
+  // time: 0.051403450965881
+  echo 'in_array 第一引数配列 time: ' . (array_sum($times) / count($times)) . "\n";
 
   unset($id);
   unset($ids);
